@@ -1,0 +1,238 @@
+
+filename1 = input('filename.tif = ');
+filename2 = 'RoiSet2.zip'; 
+
+%[~, Movie] = myOpenOMEtiff(filename1);
+Movie = openMovie(filename1);
+Movie = double(Movie);
+sz = size(Movie);
+
+%gets rid of the extra frame if there are uneven number of red and green frames:
+if mod(sz(3),2) ~= 0 
+    Movie = Movie(:,:,1:end-1);
+end
+sz(3) = size(Movie,3);
+
+%the red filter is always the top half of the camera
+Gcamp_Movie = Movie(136:end,:,1:2:end);
+Rcamp_Movie = Movie(1:135,:,2:2:end);
+% Gcamp_Movie = Movie(271:end,:,1:2:end);
+% Rcamp_Movie = Movie(1:270,:,2:2:end);
+
+
+
+%Make  mask
+[sROI] = ReadImageJROI(filename2);
+mask = poly2mask(sROI{1,1}.mnCoordinates(:,1), sROI{1,1}.mnCoordinates(:,2),sz(1),sz(2))+poly2mask(sROI{1,2}.mnCoordinates(:,1), sROI{1,2}.mnCoordinates(:,2),sz(1),sz(2));
+sz=[540 640 sz(3)];
+mask=poly2mask(sROI{1,1}.mnCoordinates(:,1), sROI{1,1}.mnCoordinates(:,2),sz(1),sz(2));
+
+
+if sum(sum(mask(1:270,:)))>0
+    mask=mask(1:270,:);
+else
+    mask=mask(271:end,:);
+end
+mask=imresize(mask,0.5,'nearest'); 
+
+
+index=find(mask);
+
+sz=size(Rcamp_Movie);
+
+%reshape matrix so that it is pixel by frame
+Gcamp_Movie=reshape(Gcamp_Movie,sz(1)*sz(2),sz(3));
+Rcamp_Movie=reshape(Rcamp_Movie,sz(1)*sz(2),sz(3));
+
+
+
+%top hat filtering to remove temporal bleaching 
+hat = 150;
+se = strel('line', hat, 0);
+
+%It seems that this works best by mirroring the beginning before applying
+%the filter and then taking out the added portion immediately after
+flpRcamp=horzcat(fliplr(Rcamp_Movie(:,1:hat)),Rcamp_Movie(:,:));
+flpGcamp=horzcat(fliplr(Gcamp_Movie(:,1:hat)),Gcamp_Movie(:,:));
+
+Rcamp_Movieln=zeros(sz(1)*sz(2), (sz(3))+hat);
+Gcamp_Movieln=zeros(sz(1)*sz(2), (sz(3))+hat);
+
+
+
+for i = 1:length(index)
+     Rcamp_Movieln(index(i),:)=imtophat(flpRcamp(index(i),:), se);
+     Gcamp_Movieln(index(i),:)=imtophat(flpGcamp(index(i),:), se);
+end
+
+Rcamp_Movieln=Rcamp_Movieln(:,(hat+1):end); 
+Gcamp_Movieln=Gcamp_Movieln(:,(hat+1):end); 
+
+
+%%
+% saveRcamp=Rcamp_Movie;
+% saveGcamp=Gcamp_Movie;
+% baselinR=saveRcamp-Rcamp_Movieln;
+% baselinG=saveGcamp-Gcamp_Movieln;
+% %baselinR=saveRcamp-Rcamp_Movieln(:,(hat+1):end);
+% % figure; plot(mean(baselinR))
+% % figure; plot(mean(baselinR,2))
+% tmpR=Rcamp_Movieln+repmat(mean(baselinR,2), 1, sz(3));
+% figure; plot(mean(tmpR))
+% %baselinG=saveGcamp-Gcamp_Movieln(:,(hat+1):end);
+% tmpG=Gcamp_Movieln+repmat(mean(baselinG,2), 1, sz(3));
+% figure; plot(mean(tmpG))
+% %%
+% 
+% Rcamp_Movie = tmpR ./ (mean(baselinR,2) * ones(1,sz(3))) - 1;
+% Gcamp_Movie = tmpG ./ (mean(baselinG,2) * ones(1,sz(3))) - 1;
+
+
+Rcamp_Movie = Rcamp_Movie ./ (mean(Rcamp_Movie,2) * ones(1,sz(3))) - 1;
+Gcamp_Movie = Gcamp_Movie ./ (mean(Gcamp_Movie,2) * ones(1,sz(3))) - 1;
+
+
+% Rcamp_Movie_mean = mean(Rcamp_Movie,3);
+% %Basic deltaF/F, still looking for a non forloop way to do this!
+% for i = 1:size(Rcamp_Movie,3)
+% 		Rcamp_Movie(:,:,i) = (Rcamp_Movie(:,:,i) - Rcamp_Movie_mean)./Rcamp_Movie_mean;
+% end
+% Gcamp_Movie_mean = mean(Gcamp_Movie,3);
+% for i = 1:size(Gcamp_Movie,3)
+% 		Gcamp_Movie(:,:,i) = (Gcamp_Movie(:,:,i) - Gcamp_Movie_mean)./Gcamp_Movie_mean;
+% end
+
+Rcamp_Movie=reshape(Rcamp_Movie,sz);
+Gcamp_Movie=reshape(Gcamp_Movie,sz);
+Rcamp_Movie(~find(mask))=0;
+Gcamp_Movie(~find(mask))=0;
+
+% Rcamp_Movie=Rcamp_Movie(:,321:end,:);
+% Gcamp_Movie=Gcamp_Movie(:,321:end,:);
+
+% mask=mask(:,321:end,:);
+index=find(mask);
+
+clear flpRcamp flpGcamp
+sz=size(Rcamp_Movie);
+%%
+Cors=zeros(sz(1)*2-1,sz(2)*2-1,sz(3));
+parfor i=1:500
+Cors(:,:,i)=xcorr2(Gcamp_Movie(:,:,i),Rcamp_Movie(:,:,i));
+end
+%figure; imagesc(mean(Cors,3))
+
+[r,c]=find(mean(Cors,3)==max(max(mean(Cors,3))))
+xshift=r-sz(1)
+yshift=c-sz(2)
+
+Rcamp=reshape(Rcamp_Movie,sz);
+newRcamp=zeros(sz);
+newRcamp(xshift+1:end,yshift+1:end,:)=Rcamp(1:end-xshift,1:end-yshift,:);
+%newRcamp(1:end+xshift,yshift+1:end,:)=Rcamp(-xshift+1:end,1:end-yshift,:);
+% %newRcamp(xshift+1:end,1:end+yshift,:)=Rcamp(1:end-xshift,-yshift+1:end,:);
+Rcamp_Movie=newRcamp;
+Rcamp_Movie=reshape(Rcamp_Movie,size(Gcamp_Movie));
+
+%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+
+
+Gcamp_Movie=reshape(Gcamp_Movie,sz(1)*sz(2),sz(3));
+Rcamp_Movie=reshape(Rcamp_Movie,sz(1)*sz(2),sz(3));
+
+Rcamp_tmp=Rcamp_Movie(index,:);
+Gcamp_tmp=Gcamp_Movie(index,:);
+
+
+%this is the beginning of what we discussed, here I am making a correlation
+%matrix from the Gcamp and Rcamp movies (movieCoefs)
+Gcamp_tmp=Gcamp_tmp'; Rcamp_tmp=Rcamp_tmp';
+%clear Gcamp_Movie Gcamp_Movie_mean Gcamp_Movieln Rcamp_Movie Rcamp_Movie_mean Rcamp_Movieln
+save('01_s3_prePro_noBleach.mat', 'Gcamp_tmp' , 'Rcamp_tmp', 'sz', 'index');
+
+% bothMovs=[Rcamp_tmp Gcamp_tmp];
+% 
+% tic
+% movieCoefs=corrcoef(bothMovs);
+% toc
+% 
+% clear bothMovs Movie
+% 
+% %Next I take the quadrant that is relevant to the correlation between Red
+% %and Green (instead of the autocorrelation quadrants, for example)
+% 
+% 
+% %Ri=movieCoefs(1:length(index),1:length(index));
+% %Gi=movieCoefs(length(index)+1:end,length(index)+1:end);
+% RxG=movieCoefs(length(index)+1:end, 1:length(index));
+% %GxR=movieCoefs(1:length(index), length(index)+1:end);
+% clear movieCoefs
+% 
+% 
+% %A little background here, it turned out that plugging back in the entire
+% %correlation matrix was creating uninteligible artifacts- the optimal size
+% %for recreating the original post-synaptic movie was a 20x20 pixel filter:
+% 
+% 
+% fS=input('filt size=');
+% %21 is optimal for stage 3
+% 
+% %I'm creating the average 20x20 corMatrix for each pixel
+% meanPSF=zeros(fS*2+1);
+% count=0;
+% for i=1:length(index)
+%     RxGmat=zeros(sz(1)*sz(2),1);
+%     RxGmat(index,:)=RxG(i,:);
+%     RxGmat=reshape(RxGmat,sz(1),sz(2));
+%     [r,c]=ind2sub(size(RxGmat),index(i));
+%     if r-50>0 && c-50>0 && r+50<sz(1) && c+50<sz(2)
+%         tmp=RxGmat(r-fS:r+fS, c-fS:c+fS);
+%         meanPSF=meanPSF+tmp;
+%         count=count+1;
+%     end
+%     %A = [1 0 0; 0 1 0; (sz(1)/2-r) (sz(2)/2-c) 1];
+%     %tform = affine2d(A);
+%     %RxGmat=imtranslate(RxGmat,(sz(1)/2-r),(sz(2)/2-c));
+% end
+% figure; image(meanPSF/count,'CDataMapping','scaled');
+% colorbar
+% filt=meanPSF/count;
+% 
+% %And finally here I pass the Rcamp movie through the filter created above
+% 
+% 
+% Gcamp=zeros(sz(1)*sz(2),sz(3));
+% Gcamp(index,:)=Gcamp_tmp';
+% Gcamp=Gcamp./max(max(Gcamp));
+% I2=reshape(I2,sz(1)*sz(2),sz(3));
+% %Gcamp=reshape(Gcamp,sz);
+% 
+% % RxG_diff=sqrt(sum(sqrt(sum((Gcamp-I2).^2,2)))/length(index));
+% % disp(['filter size:']), fS
+% 
+% % residsumsq = norm(y-yhat,2)^2;
+% % tsumsq = norm(y-mean(y),2)^2;
+% % R2 = 1-(tsumsq/residsumsq);
+% 
+% 
+% Rcamp=zeros(sz(1)*sz(2),sz(3));
+% Rcamp(index,:)=Rcamp_tmp';
+% Rcamp=reshape(Rcamp,sz);
+% I2=zeros(sz);
+% for i=1:sz(3)
+%     I2(:,:,i) = imfilter(Rcamp(:,:,i),meanS3_20);
+% end
+% Rcamp=Rcamp./ max(max(max(Rcamp)));
+% I2=I2./ max(max(max(I2)));
+% 
+% Gcamp=zeros(sz(1)*sz(2),sz(3));
+% Gcamp(index,:)=Gcamp_tmp';
+% Gcamp=Gcamp./max(max(Gcamp));
+% I2=reshape(I2,sz(1)*sz(2),sz(3));
+% meanGcamp=repmat(mean(Gcamp,2), 1, sz(3));
+% 
+% R2=1-sum(sum((Gcamp-I2).^2,2))/sum(sum((Gcamp-meanGcamp).^2,2));
